@@ -130,6 +130,88 @@ namespace CESimpleSidearmsRearm
         }
     }
 
+    internal static class ManualSidearmProtection
+    {
+        /// <summary>
+        /// Assign SS memory copies to concrete carried instances. The equipped primary consumes
+        /// memory first because CE drops equipment separately; remaining memory protects matching
+        /// def+stuff copies in inventory. This avoids a remembered material variant shielding a
+        /// different physical copy that merely shares the same ThingDef.
+        /// </summary>
+        public static Dictionary<Thing, int> ProtectedInventoryStacks(
+            Pawn pawn,
+            CompSidearmMemory memory)
+        {
+            var protectedStacks = new Dictionary<Thing, int>();
+
+            if (pawn?.inventory?.innerContainer == null ||
+                memory?.RememberedWeapons == null ||
+                memory.RememberedWeapons.Count == 0)
+                return protectedStacks;
+
+            Dictionary<ThingDefStuffDefPair, int> remaining = memory.RememberedWeapons
+                .Where(pair => pair.thing != null)
+                .GroupBy(pair => pair)
+                .ToDictionary(group => group.Key, group => group.Count());
+
+            if (pawn.equipment?.Primary != null)
+            {
+                var primaryPair = new ThingDefStuffDefPair(
+                    pawn.equipment.Primary.def,
+                    pawn.equipment.Primary.Stuff);
+
+                if (remaining.TryGetValue(primaryPair, out int primaryMemories) &&
+                    primaryMemories > 0)
+                {
+                    if (primaryMemories == 1)
+                        remaining.Remove(primaryPair);
+                    else
+                        remaining[primaryPair] = primaryMemories - 1;
+                }
+            }
+
+            foreach (Thing thing in pawn.inventory.innerContainer)
+            {
+                if (!(thing is ThingWithComps weapon) || !weapon.def.IsWeapon)
+                    continue;
+
+                var pair = new ThingDefStuffDefPair(weapon.def, weapon.Stuff);
+                if (!remaining.TryGetValue(pair, out int memoriesLeft) || memoriesLeft <= 0)
+                    continue;
+
+                int protectCount = Math.Min(thing.stackCount, memoriesLeft);
+                if (protectCount <= 0)
+                    continue;
+
+                protectedStacks[thing] = protectCount;
+
+                memoriesLeft -= protectCount;
+                if (memoriesLeft <= 0)
+                    remaining.Remove(pair);
+                else
+                    remaining[pair] = memoriesLeft;
+            }
+
+            return protectedStacks;
+        }
+
+        public static Dictionary<ThingDef, int> ProtectedInventoryCountsByDef(
+            Pawn pawn,
+            CompSidearmMemory memory)
+        {
+            var result = new Dictionary<ThingDef, int>();
+
+            foreach (KeyValuePair<Thing, int> entry in ProtectedInventoryStacks(pawn, memory))
+            {
+                int current;
+                result.TryGetValue(entry.Key.def, out current);
+                result[entry.Key.def] = current + entry.Value;
+            }
+
+            return result;
+        }
+    }
+
     /// <summary>
     /// CE's GetStorageByThingDef serves both pickup and drop logic. Manual SS sidearms should
     /// be hidden only while CE is calculating excess inventory; hiding them globally changes
@@ -180,6 +262,68 @@ namespace CESimpleSidearmsRearm
             ExcessScanContext.Enter();
         }
 
+        [HarmonyPostfix]
+        public static void Postfix(
+            Pawn pawn,
+            ref Thing dropThing,
+            ref int dropCount,
+            ref bool __result)
+        {
+            if (!__result ||
+                pawn == null ||
+                dropThing == null ||
+                !dropThing.def.IsWeapon ||
+                LoadoutWeaponPolicy.CEManages(pawn, dropThing.def, staticSlotsOnly: true))
+                return;
+
+            CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(pawn, false);
+            if (memory?.RememberedWeapons == null)
+                return;
+
+            Dictionary<Thing, int> protectedStacks =
+                ManualSidearmProtection.ProtectedInventoryStacks(pawn, memory);
+
+            if (!protectedStacks.TryGetValue(dropThing, out int protectedFromCandidate) ||
+                protectedFromCandidate <= 0)
+                return;
+
+            int unprotectedInCandidate = dropThing.stackCount - protectedFromCandidate;
+            if (unprotectedInCandidate > 0)
+            {
+                dropCount = Math.Min(dropCount, unprotectedInCandidate);
+                return;
+            }
+
+            // CE's count scan is def-level and its final selection is FirstOrDefault. If that
+            // happens to point at the protected copy, redirect to an unprotected copy of the
+            // same def rather than throwing away the sidearm SS owns.
+            foreach (Thing candidate in pawn.inventory.innerContainer)
+            {
+                if (candidate == dropThing ||
+                    candidate.def != dropThing.def ||
+                    pawn.IsItemQuestLocked(candidate))
+                    continue;
+
+                int protectedCount = 0;
+                protectedStacks.TryGetValue(candidate, out protectedCount);
+
+                int unprotectedCount = candidate.stackCount - protectedCount;
+                if (unprotectedCount <= 0)
+                    continue;
+
+                dropThing = candidate;
+                dropCount = Math.Min(dropCount, unprotectedCount);
+                return;
+            }
+
+            // The only physical inventory copy CE selected is protected. Its remaining def-level
+            // excess can only come from a separately handled equipped copy, so do not sacrifice
+            // the remembered inventory sidearm here.
+            dropThing = null;
+            dropCount = 0;
+            __result = false;
+        }
+
         [HarmonyFinalizer]
         public static Exception Finalizer(Exception __exception)
         {
@@ -212,17 +356,19 @@ namespace CESimpleSidearmsRearm
             Dictionary<ThingDef, int> managed =
                 LoadoutWeaponPolicy.ExactWeaponCounts(pawn, staticSlotsOnly: true);
 
-            foreach (ThingDef def in __result.Keys.Where(d => d != null && d.IsWeapon).ToList())
+            Dictionary<ThingDef, int> protectedInventory =
+                ManualSidearmProtection.ProtectedInventoryCountsByDef(pawn, memory);
+
+            foreach (KeyValuePair<ThingDef, int> entry in protectedInventory)
             {
-                if (managed.ContainsKey(def))
+                ThingDef def = entry.Key;
+
+                if (managed.ContainsKey(def) ||
+                    !__result.TryGetValue(def, out Integer stored))
                     continue;
 
-                int remembered = memory.RememberedWeapons.Count(pair => pair.thing == def);
-                if (remembered <= 0)
-                    continue;
-
-                __result[def].value -= remembered;
-                if (__result[def].value <= 0)
+                stored.value -= entry.Value;
+                if (stored.value <= 0)
                     __result.Remove(def);
             }
         }
