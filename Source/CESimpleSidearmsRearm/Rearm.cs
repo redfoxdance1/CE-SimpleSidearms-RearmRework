@@ -18,8 +18,10 @@ namespace CESimpleSidearmsRearm
         {
             get
             {
-                if (Slot?.thingDef != null) return Slot.thingDef.LabelCap;
-                if (Slot?.genericDef != null) return Slot.genericDef.label.CapitalizeFirst();
+                if (Slot?.thingDef != null)
+                    return Slot.thingDef.LabelCap;
+                if (Slot?.genericDef != null)
+                    return Slot.genericDef.label.CapitalizeFirst();
                 return "Unknown loadout entry";
             }
         }
@@ -31,7 +33,8 @@ namespace CESimpleSidearmsRearm
         {
             var result = new List<LoadoutDeficit>();
             Loadout loadout = pawn?.GetLoadout();
-            if (loadout == null || loadout.defaultLoadout) return result;
+            if (loadout == null || loadout.defaultLoadout)
+                return result;
 
             Dictionary<ThingDef, int> listing = pawn.GetStorageByThingDef()
                 .ToDictionary(k => k.Key, v => v.Value.value);
@@ -41,26 +44,36 @@ namespace CESimpleSidearmsRearm
             {
                 int wanted = slot.count;
 
-                if (slot.thingDef != null && listing.TryGetValue(slot.thingDef, out int have))
+                if (slot.thingDef != null &&
+                    listing.TryGetValue(slot.thingDef, out int exactHave))
                 {
-                    int used = Math.Min(wanted, have);
+                    int used = Math.Min(wanted, exactHave);
                     wanted -= used;
-                    have -= used;
-                    if (have <= 0) listing.Remove(slot.thingDef);
-                    else listing[slot.thingDef] = have;
+                    exactHave -= used;
+
+                    if (exactHave <= 0)
+                        listing.Remove(slot.thingDef);
+                    else
+                        listing[slot.thingDef] = exactHave;
                 }
 
                 if (wanted > 0 && slot.genericDef != null)
                 {
-                    foreach (ThingDef def in listing.Keys.Where(d => slot.genericDef.lambda(d)).ToList())
+                    foreach (ThingDef def in listing.Keys
+                        .Where(d => slot.genericDef.lambda(d)).ToList())
                     {
-                        int have = listing[def];
-                        int used = Math.Min(wanted, have);
+                        int genericHave = listing[def];
+                        int used = Math.Min(wanted, genericHave);
                         wanted -= used;
-                        have -= used;
-                        if (have <= 0) listing.Remove(def);
-                        else listing[def] = have;
-                        if (wanted <= 0) break;
+                        genericHave -= used;
+
+                        if (genericHave <= 0)
+                            listing.Remove(def);
+                        else
+                            listing[def] = genericHave;
+
+                        if (wanted <= 0)
+                            break;
                     }
                 }
 
@@ -80,16 +93,24 @@ namespace CESimpleSidearmsRearm
         private const int MaxDuration = 10000;
         private const int MaxSameJob = 3;
 
-        private readonly Dictionary<int, RearmState> active = new Dictionary<int, RearmState>();
+        private readonly Dictionary<int, RearmState> active =
+            new Dictionary<int, RearmState>();
 
-        public RearmManager(Game game) { }
+        public RearmManager(Game game)
+        {
+        }
 
-        public bool IsActive(Pawn pawn) => pawn != null && active.ContainsKey(pawn.thingIDNumber);
+        public bool IsActive(Pawn pawn)
+        {
+            return pawn != null && active.ContainsKey(pawn.thingIDNumber);
+        }
 
         public void Toggle(Pawn pawn)
         {
-            if (IsActive(pawn)) Cancel(pawn);
-            else Begin(pawn);
+            if (IsActive(pawn))
+                Cancel(pawn);
+            else
+                Begin(pawn);
         }
 
         public void Begin(Pawn pawn)
@@ -97,11 +118,19 @@ namespace CESimpleSidearmsRearm
             Loadout loadout = pawn?.GetLoadout();
             if (pawn == null || loadout == null || loadout.defaultLoadout)
             {
-                Messages.Message("No Combat Extended loadout is assigned.", MessageTypeDefOf.RejectInput, false);
+                Messages.Message(
+                    "No Combat Extended loadout is assigned.",
+                    MessageTypeDefOf.RejectInput,
+                    false);
                 return;
             }
 
-            var state = new RearmState { Pawn = pawn, StartTick = Find.TickManager.TicksGame };
+            var state = new RearmState
+            {
+                Pawn = pawn,
+                StartTick = Find.TickManager.TicksGame
+            };
+
             active[pawn.thingIDNumber] = state;
             pawn.jobs?.EndCurrentJob(JobCondition.InterruptForced);
             Advance(state);
@@ -110,7 +139,12 @@ namespace CESimpleSidearmsRearm
         public void Cancel(Pawn pawn)
         {
             if (pawn != null && active.Remove(pawn.thingIDNumber))
-                Messages.Message("Rearm cancelled for " + pawn.LabelShortCap + ".", MessageTypeDefOf.NeutralEvent, false);
+            {
+                Messages.Message(
+                    "Rearm cancelled for " + pawn.LabelShortCap + ".",
+                    MessageTypeDefOf.NeutralEvent,
+                    false);
+            }
         }
 
         public override void GameComponentTick()
@@ -120,11 +154,14 @@ namespace CESimpleSidearmsRearm
             if (tick % SyncInterval == 0)
             {
                 foreach (Map map in Find.Maps)
+                {
                     foreach (Pawn pawn in map.mapPawns.FreeColonistsSpawned)
                         LoadoutWeaponPolicy.Reconcile(pawn);
+                }
             }
 
-            if (tick % ProcessInterval != 0 || active.Count == 0) return;
+            if (tick % ProcessInterval != 0 || active.Count == 0)
+                return;
 
             foreach (RearmState state in active.Values.ToList())
             {
@@ -138,6 +175,16 @@ namespace CESimpleSidearmsRearm
                 if (state.ActiveJob != null && pawn.CurJob == state.ActiveJob)
                     continue;
 
+                // A new player-forced order supersedes Rearm instead of being interrupted by it.
+                if (state.ActiveJob != null &&
+                    pawn.CurJob != null &&
+                    pawn.CurJob != state.ActiveJob &&
+                    pawn.CurJob.playerForced)
+                {
+                    active.Remove(state.PawnId);
+                    continue;
+                }
+
                 Advance(state);
             }
         }
@@ -145,7 +192,8 @@ namespace CESimpleSidearmsRearm
         private void Advance(RearmState state)
         {
             Pawn pawn = state.Pawn;
-            if (pawn == null || !active.ContainsKey(pawn.thingIDNumber)) return;
+            if (pawn == null || !active.ContainsKey(pawn.thingIDNumber))
+                return;
 
             if (state.Attempts >= MaxAttempts ||
                 Find.TickManager.TicksGame - state.StartTick >= MaxDuration)
@@ -155,6 +203,7 @@ namespace CESimpleSidearmsRearm
             }
 
             LoadoutWeaponPolicy.Reconcile(pawn);
+
             List<LoadoutDeficit> deficits = LoadoutEvaluator.GetDeficits(pawn);
             bool excess = pawn.HasExcessThing();
 
@@ -171,25 +220,40 @@ namespace CESimpleSidearmsRearm
             }
             catch (Exception e)
             {
-                Log.Error(Bootstrap.LogPrefix + "CE loadout job generation failed: " + e);
+                Log.Error(Bootstrap.LogPrefix +
+                          "CE loadout job generation failed: " + e);
                 Finish(state, false, "CE loadout job generation failed");
                 return;
             }
 
-            if (job == null)
+            // CE performs some drop work synchronously before returning the haul job. Recheck
+            // state before treating a null/fallback job as a failure.
+            if (job == null || !IsRearmJob(job))
             {
-                Finish(state, false, "no obtainable loadout job");
-                return;
-            }
+                LoadoutWeaponPolicy.Reconcile(pawn);
+                deficits = LoadoutEvaluator.GetDeficits(pawn);
+                excess = pawn.HasExcessThing();
 
-            if (!excess && deficits.Count > 0 && !IsAcquisitionJob(job))
-            {
-                Finish(state, false, "required items are unavailable or unreachable");
+                if (deficits.Count == 0 && !excess)
+                {
+                    Finish(state, true, null);
+                    return;
+                }
+
+                Finish(
+                    state,
+                    false,
+                    job == null
+                        ? "no obtainable loadout job"
+                        : "CE returned a non-loadout fallback job");
                 return;
             }
 
             string signature = Signature(job);
-            if (signature == state.LastJobSignature) state.SameJobRepeats++;
+            if (signature == state.LastJobSignature)
+            {
+                state.SameJobRepeats++;
+            }
             else
             {
                 state.LastJobSignature = signature;
@@ -212,16 +276,22 @@ namespace CESimpleSidearmsRearm
             }
             catch (Exception e)
             {
-                Log.Error(Bootstrap.LogPrefix + "Could not start rearm job: " + e);
+                Log.Error(Bootstrap.LogPrefix +
+                          "Could not start rearm job " + job + ": " + e);
                 Finish(state, false, "the next rearm job could not start");
             }
         }
 
-        private static bool IsAcquisitionJob(Job job)
+        private static bool IsRearmJob(Job job)
         {
-            return job?.def == JobDefOf.Equip ||
-                   job?.def == JobDefOf.TakeCountToInventory ||
-                   job?.def == CE_JobDefOf.TakeFromOther;
+            if (job == null)
+                return false;
+
+            return job.def == JobDefOf.Equip ||
+                   job.def == JobDefOf.TakeCountToInventory ||
+                   job.def == CE_JobDefOf.TakeFromOther ||
+                   job.def == JobDefOf.HaulToCell ||
+                   job.def == JobDefOf.HaulToContainer;
         }
 
         private static string Signature(Job job)
@@ -229,7 +299,10 @@ namespace CESimpleSidearmsRearm
             string target = job?.targetA.Thing != null
                 ? job.targetA.Thing.thingIDNumber.ToString()
                 : job?.targetA.Cell.ToString() ?? "none";
-            return (job?.def?.defName ?? "null") + ":" + target + ":" + (job?.count ?? 0);
+
+            return (job?.def?.defName ?? "null") +
+                   ":" + target +
+                   ":" + (job?.count ?? 0);
         }
 
         private void Finish(RearmState state, bool success, string reason)
@@ -238,22 +311,33 @@ namespace CESimpleSidearmsRearm
             active.Remove(state.PawnId);
             state.ActiveJob = null;
 
-            if (pawn == null) return;
+            if (pawn == null)
+                return;
 
             if (success)
             {
-                Messages.Message(pawn.LabelShortCap + " is rearmed.", MessageTypeDefOf.PositiveEvent, false);
+                Messages.Message(
+                    pawn.LabelShortCap + " is rearmed.",
+                    MessageTypeDefOf.PositiveEvent,
+                    false);
                 return;
             }
 
             List<LoadoutDeficit> deficits = LoadoutEvaluator.GetDeficits(pawn);
+
             string missing = deficits.Count == 0
                 ? "No missing loadout entries remain, but cleanup could not complete."
-                : "Still missing: " + string.Join(", ", deficits.Select(d => d.Label + " x" + d.Missing));
+                : "Still missing: " + string.Join(
+                    ", ",
+                    deficits.Select(d => d.Label + " x" + d.Missing));
 
-            if (!string.IsNullOrEmpty(reason)) missing += " (" + reason + ")";
-            Messages.Message("Rearm incomplete for " + pawn.LabelShortCap + ". " + missing,
-                MessageTypeDefOf.NegativeEvent, false);
+            if (!string.IsNullOrEmpty(reason))
+                missing += " (" + reason + ")";
+
+            Messages.Message(
+                "Rearm incomplete for " + pawn.LabelShortCap + ". " + missing,
+                MessageTypeDefOf.NegativeEvent,
+                false);
         }
 
         private sealed class RearmState
@@ -264,6 +348,7 @@ namespace CESimpleSidearmsRearm
             public Job ActiveJob;
             public string LastJobSignature;
             public int SameJobRepeats;
+
             public int PawnId => Pawn?.thingIDNumber ?? 0;
         }
     }
@@ -272,25 +357,35 @@ namespace CESimpleSidearmsRearm
     public static class RearmGizmoPatch
     {
         [HarmonyPostfix]
-        public static IEnumerable<Gizmo> Postfix(IEnumerable<Gizmo> __result, Pawn __instance)
+        public static IEnumerable<Gizmo> Postfix(
+            IEnumerable<Gizmo> __result,
+            Pawn __instance)
         {
-            foreach (Gizmo gizmo in __result) yield return gizmo;
+            foreach (Gizmo gizmo in __result)
+                yield return gizmo;
 
             Pawn pawn = __instance;
-            if (pawn == null || pawn.Dead || !pawn.IsColonistPlayerControlled ||
-                pawn.GetLoadout() == null || pawn.GetLoadout().defaultLoadout || Current.Game == null)
+            if (pawn == null ||
+                pawn.Dead ||
+                !pawn.IsColonistPlayerControlled ||
+                pawn.GetLoadout() == null ||
+                pawn.GetLoadout().defaultLoadout ||
+                Current.Game == null)
                 yield break;
 
             RearmManager manager = Current.Game.GetComponent<RearmManager>();
-            if (manager == null) yield break;
+            if (manager == null)
+                yield break;
 
-            bool active = manager.IsActive(pawn);
+            bool isActive = manager.IsActive(pawn);
+
             yield return new Command_Action
             {
-                defaultLabel = active ? "Cancel Rearm" : "Rearm",
-                defaultDesc = active
+                defaultLabel = isActive ? "Cancel Rearm" : "Rearm",
+                defaultDesc = isActive
                     ? "Cancel the current forced loadout reconciliation."
-                    : "Immediately reconcile this pawn with their Combat Extended loadout. Missing or unreachable entries are reported instead of retried forever.",
+                    : "Immediately reconcile this pawn with their Combat Extended loadout. " +
+                      "Missing or unreachable entries are reported instead of retried forever.",
                 action = () => manager.Toggle(pawn)
             };
         }
