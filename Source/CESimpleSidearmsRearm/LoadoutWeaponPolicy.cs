@@ -308,11 +308,24 @@ namespace CESimpleSidearmsRearm
             return protectedStacks;
         }
 
-        public static Dictionary<ThingDef, int> ProtectedInventoryCountsByDef(
+        public static Dictionary<ThingDef, int> ProtectedStorageCountsByDef(
             Pawn pawn,
             CompSidearmMemory memory)
         {
             var result = new Dictionary<ThingDef, int>();
+
+            // CE's storage dictionary includes the equipped primary. GetExcessEquipment handles
+            // that object separately, so a remembered manual primary must also be removed from
+            // the nested inventory-excess view or its def can block scanning later excess items.
+            if (pawn?.equipment?.Primary != null && memory?.RememberedWeapons != null)
+            {
+                var primaryPair = new ThingDefStuffDefPair(
+                    pawn.equipment.Primary.def,
+                    pawn.equipment.Primary.Stuff);
+
+                if (memory.RememberedWeapons.Contains(primaryPair))
+                    result[pawn.equipment.Primary.def] = 1;
+            }
 
             foreach (KeyValuePair<Thing, int> entry in ProtectedInventoryStacks(pawn, memory))
             {
@@ -469,10 +482,10 @@ namespace CESimpleSidearmsRearm
             Dictionary<ThingDef, int> managed =
                 LoadoutWeaponPolicy.ExactWeaponCounts(pawn, staticSlotsOnly: true);
 
-            Dictionary<ThingDef, int> protectedInventory =
-                ManualSidearmProtection.ProtectedInventoryCountsByDef(pawn, memory);
+            Dictionary<ThingDef, int> protectedStorage =
+                ManualSidearmProtection.ProtectedStorageCountsByDef(pawn, memory);
 
-            foreach (KeyValuePair<ThingDef, int> entry in protectedInventory)
+            foreach (KeyValuePair<ThingDef, int> entry in protectedStorage)
             {
                 ThingDef def = entry.Key;
 
