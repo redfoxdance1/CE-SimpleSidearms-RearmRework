@@ -47,9 +47,9 @@ namespace CESimpleSidearmsRearm
         }
 
         /// <summary>
-        /// For exact weapon defs listed by CE, keep Simple Sidearms' multiset count from
-        /// exceeding CE's requested count. Missing memories are only projected from copies
-        /// the pawn already carries; CE remains responsible for acquiring equipment.
+        /// Simple Sidearms memory is a multiset. For exact weapon defs listed by CE, cap
+        /// accidental duplicate memories at CE's requested quantity. Do not create new SS
+        /// memories: forgetting a weapon in the SS gizmo remains player intent.
         /// </summary>
         public static void Reconcile(Pawn pawn)
         {
@@ -78,30 +78,6 @@ namespace CESimpleSidearmsRearm
 
                         ThingDefStuffDefPair pair = memory.RememberedWeapons[index];
                         memory.ForgetSidearmMemory(pair);
-                    }
-
-                    int remembered = memory.RememberedWeapons.Count(pair => pair.thing == def);
-                    if (remembered >= wanted)
-                        continue;
-
-                    List<ThingWithComps> carried = CarriedWeapons(pawn, def);
-                    foreach (ThingWithComps weapon in carried)
-                    {
-                        if (remembered >= wanted)
-                            break;
-
-                        ThingDefStuffDefPair pair = new ThingDefStuffDefPair(weapon.def, weapon.Stuff);
-                        int rememberedOfPair = memory.RememberedWeapons.Count(existing => existing == pair);
-                        int carriedOfPair = carried.Count(existing =>
-                            new ThingDefStuffDefPair(existing.def, existing.Stuff) == pair);
-
-                        if (rememberedOfPair >= carriedOfPair)
-                            continue;
-
-                        // Write the list directly. Calling InformOfAddedSidearm is unnecessary here
-                        // and would make reconciliation itself participate in SS's duplicate-growth path.
-                        memory.rememberedWeapons.Add(pair);
-                        remembered++;
                     }
                 }
             }
@@ -152,27 +128,6 @@ namespace CESimpleSidearmsRearm
 
             return bestIndex;
         }
-
-        private static List<ThingWithComps> CarriedWeapons(Pawn pawn, ThingDef def)
-        {
-            var result = new List<ThingWithComps>();
-
-            if (pawn?.equipment?.Primary != null && pawn.equipment.Primary.def == def)
-                result.Add(pawn.equipment.Primary);
-
-            if (pawn?.inventory?.innerContainer != null)
-            {
-                foreach (Thing thing in pawn.inventory.innerContainer)
-                {
-                    if (thing is ThingWithComps weapon &&
-                        weapon.def == def &&
-                        weapon.def.IsWeapon)
-                        result.Add(weapon);
-                }
-            }
-
-            return result;
-        }
     }
 
     /// <summary>
@@ -199,7 +154,10 @@ namespace CESimpleSidearmsRearm
         }
     }
 
-    [HarmonyPatch(typeof(JobGiver_RetrieveWeapon), nameof(JobGiver_RetrieveWeapon.TryGiveJobStatic))]
+    [HarmonyPatch(
+        typeof(JobGiver_RetrieveWeapon),
+        nameof(JobGiver_RetrieveWeapon.TryGiveJobStatic),
+        new[] { typeof(Pawn), typeof(bool) })]
     public static class RetrieveWeaponReconcilePatch
     {
         [HarmonyPrefix]
