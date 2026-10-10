@@ -92,6 +92,7 @@ namespace CESimpleSidearmsRearm
         private const int MaxAttempts = 24;
         private const int MaxDuration = 10000;
         private const int MaxSameJob = 3;
+        private const float ForcedSearchRadius = 9999f;
 
         private readonly Dictionary<int, RearmState> active =
             new Dictionary<int, RearmState>();
@@ -102,11 +103,16 @@ namespace CESimpleSidearmsRearm
 
         public bool IsActive(Pawn pawn)
         {
-            return pawn != null && active.ContainsKey(pawn.thingIDNumber);
+            return Bootstrap.Enabled &&
+                   pawn != null &&
+                   active.ContainsKey(pawn.thingIDNumber);
         }
 
         public void Toggle(Pawn pawn)
         {
+            if (!Bootstrap.Enabled)
+                return;
+
             if (IsActive(pawn))
                 Cancel(pawn);
             else
@@ -115,6 +121,9 @@ namespace CESimpleSidearmsRearm
 
         public void Begin(Pawn pawn)
         {
+            if (!Bootstrap.Enabled)
+                return;
+
             Loadout loadout = pawn?.GetLoadout();
             if (pawn == null || loadout == null || loadout.defaultLoadout)
             {
@@ -149,6 +158,12 @@ namespace CESimpleSidearmsRearm
 
         public override void GameComponentTick()
         {
+            if (!Bootstrap.Enabled)
+            {
+                active.Clear();
+                return;
+            }
+
             int tick = Find.TickManager.TicksGame;
 
             if (tick % SyncInterval == 0)
@@ -192,7 +207,9 @@ namespace CESimpleSidearmsRearm
         private void Advance(RearmState state)
         {
             Pawn pawn = state.Pawn;
-            if (pawn == null || !active.ContainsKey(pawn.thingIDNumber))
+            if (!Bootstrap.Enabled ||
+                pawn == null ||
+                !active.ContainsKey(pawn.thingIDNumber))
                 return;
 
             if (state.Attempts >= MaxAttempts ||
@@ -226,8 +243,8 @@ namespace CESimpleSidearmsRearm
                 return;
             }
 
-            // CE performs some drop work synchronously before returning the haul job. Recheck
-            // state before treating a null/fallback job as a failure.
+            // CE performs some drop work synchronously before returning a haul job.
+            // Recheck state before treating a null/fallback job as a failure.
             if (job == null || !IsRearmJob(job))
             {
                 LoadoutWeaponPolicy.Reconcile(pawn);
@@ -240,13 +257,20 @@ namespace CESimpleSidearmsRearm
                     return;
                 }
 
-                Finish(
-                    state,
-                    false,
-                    job == null
-                        ? "no obtainable loadout job"
-                        : "CE returned a non-loadout fallback job");
-                return;
+                // Normal CE AI only searches 80 cells for ground items. Rearm is an explicit
+                // player command, so if CE otherwise gives up, make one map-wide acquisition
+                // attempt using CE's same matching, reservation, danger, food, and capacity rules.
+                if (!excess && deficits.Count > 0)
+                    job = TryMakeMapWideAcquisitionJob(pawn, deficits);
+
+                if (job == null)
+                {
+                    Finish(
+                        state,
+                        false,
+                        "required items are unavailable, forbidden, reserved, unreachable, or do not fit");
+                    return;
+                }
             }
 
             string signature = Signature(job);
@@ -280,6 +304,143 @@ namespace CESimpleSidearmsRearm
                           "Could not start rearm job " + job + ": " + e);
                 Finish(state, false, "the next rearm job could not start");
             }
+        }
+
+        private static Job TryMakeMapWideAcquisitionJob(
+            Pawn pawn,
+            List<LoadoutDeficit> deficits)
+        {
+            if (pawn?.Map == null)
+                return null;
+
+            CompInventory inventory = pawn.TryGetComp<CompInventory>();
+            Loadout loadout = pawn.GetLoadout();
+            if (inventory == null || inventory.container == null ||
+                loadout == null || loadout.defaultLoadout)
+                return null;
+
+            foreach (LoadoutDeficit deficit in deficits)
+            {
+                LoadoutSlot slot = deficit.Slot;
+                if (slot == null || deficit.Missing <= 0)
+                    continue;
+
+                ThingRequest request;
+                Predicate<Thing> matches;
+
+                if (slot.genericDef != null)
+                {
+                    request = ThingRequest.ForGroup(slot.genericDef.thingRequestGroup);
+                    matches = thing =>
+                        slot.genericDef.lambda(thing.GetInnerIfMinified().def);
+                }
+                else if (slot.thingDef != null)
+                {
+                    request = slot.thingDef.Minifiable
+                        ? ThingRequest.ForGroup(ThingRequestGroup.MinifiedThing)
+                        : ThingRequest.ForDef(slot.thingDef);
+
+                    matches = thing =>
+                        thing.GetInnerIfMinified().def == slot.thingDef;
+                }
+                else
+                {
+                    continue;
+                }
+
+                Predicate<Thing> search = thing =>
+                    matches(thing) &&
+                    !thing.IsForbidden(pawn) &&
+                    pawn.CanReserve(thing, 10, 1) &&
+                    !IsFoodInPrisonForPlayer(thing, pawn) &&
+                    EquipmentUtility.CanEquip(thing, pawn) &&
+                    AllowedByFoodRestriction(thing, pawn);
+
+                Thing found = GenClosest.ClosestThingReachable(
+                    pawn.Position,
+                    pawn.Map,
+                    request,
+                    PathEndMode.ClosestTouch,
+                    TraverseParms.For(pawn, Danger.None, TraverseMode.ByPawn),
+                    ForcedSearchRadius,
+                    search);
+
+                if (found == null)
+                    continue;
+
+                if (!inventory.CanFitInInventory(found, out int count))
+                    continue;
+
+                count = Math.Min(count, deficit.Missing);
+
+                bool doEquip =
+                    found.TryGetComp<CompEquippable>() != null &&
+                    !(pawn.story != null && pawn.WorkTagIsDisabled(WorkTags.Violent)) &&
+                    pawn.health != null &&
+                    pawn.health.capacities.CapableOf(PawnCapacityDefOf.Manipulation) &&
+                    !pawn.IsItemQuestLocked(pawn.equipment?.Primary) &&
+                    (pawn.equipment == null ||
+                     pawn.equipment.Primary == null ||
+                     !loadout.GetSlotsFor(pawn).Any(s =>
+                         s.thingDef == pawn.equipment.Primary.def ||
+                         (s.genericDef != null &&
+                          s.countType == LoadoutCountType.pickupDrop &&
+                          s.genericDef.lambda(pawn.equipment.Primary.def))));
+
+                if (doEquip)
+                    count = 1;
+
+                count = Math.Min(GetUnreservedStackCount(found), count);
+                if (count <= 0)
+                    continue;
+
+                if (doEquip)
+                    return JobMaker.MakeJob(JobDefOf.Equip, found);
+
+                Job job = JobMaker.MakeJob(JobDefOf.TakeCountToInventory, found);
+                job.count = count;
+                job.MakeDriver(pawn);
+                return job;
+            }
+
+            return null;
+        }
+
+        private static bool IsFoodInPrisonForPlayer(Thing thing, Pawn pawn)
+        {
+            return (thing.GetRoom()?.IsPrisonCell ?? false) &&
+                   thing.def.IsNutritionGivingIngestible &&
+                   pawn.Faction?.IsPlayer == true;
+        }
+
+        private static bool AllowedByFoodRestriction(Thing thing, Pawn pawn)
+        {
+            if (thing == null || !thing.def.IsNutritionGivingIngestible)
+                return true;
+
+            return pawn.foodRestriction
+                .GetCurrentRespectedRestriction(pawn)
+                ?.Allows(thing) ?? true;
+        }
+
+        private static int GetUnreservedStackCount(Thing thing)
+        {
+            List<ReservationManager.Reservation> reservations =
+                thing?.Map?.reservationManager?.ReservationsReadOnly;
+
+            if (reservations == null)
+                return 0;
+
+            int stackCount = thing.stackCount;
+
+            for (int i = 0; stackCount > 0 && i < reservations.Count; i++)
+            {
+                ReservationManager.Reservation reservation = reservations[i];
+                if (reservation.Target.Thing == thing)
+                    stackCount -= reservation.StackCount;
+            }
+
+            return Math.Max(0, stackCount);
         }
 
         private static bool IsRearmJob(Job job)
@@ -363,6 +524,9 @@ namespace CESimpleSidearmsRearm
         {
             foreach (Gizmo gizmo in __result)
                 yield return gizmo;
+
+            if (!Bootstrap.Enabled)
+                yield break;
 
             Pawn pawn = __instance;
             if (pawn == null ||
