@@ -19,14 +19,25 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Fetch current CE and Simple Sidearms assemblies
+      - name: Fetch current CE release and Simple Sidearms 1.6 assemblies
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/deps/2890901044/Assemblies"
-          mkdir -p "$GITHUB_WORKSPACE/deps/927155256/v1.6/Assemblies"
-          curl --fail --location --retry 3             https://raw.githubusercontent.com/CombatExtended-Continued/CombatExtended/Development/Source/packages/CombatExtended.dll             --output "$GITHUB_WORKSPACE/deps/2890901044/Assemblies/CombatExtended.dll"
-          curl --fail --location --retry 3             https://raw.githubusercontent.com/PeteTimesSix/SimpleSidearms/master/v1.6/Assemblies/SimpleSidearms.dll             --output "$GITHUB_WORKSPACE/deps/927155256/v1.6/Assemblies/SimpleSidearms.dll"
+
+          CE_DIR="$GITHUB_WORKSPACE/deps/2890901044"
+          SS_DIR="$GITHUB_WORKSPACE/deps/927155256/v1.6"
+          mkdir -p "$CE_DIR/Assemblies" "$SS_DIR/Assemblies"
+
+          curl --fail --location --retry 3             https://github.com/CombatExtended-Continued/CombatExtended/releases/download/v1.6.7.3.0-hotfix.1/CombatExtended-v1.6.7.3.0-hotfix.1.zip             --output "$RUNNER_TEMP/ce.zip"
+          unzip -q "$RUNNER_TEMP/ce.zip" -d "$RUNNER_TEMP/ce"
+          CE_DLL="$(find "$RUNNER_TEMP/ce" -type f -path '*/Assemblies/CombatExtended.dll' -print -quit)"
+          test -n "$CE_DLL"
+          cp "$CE_DLL" "$CE_DIR/Assemblies/CombatExtended.dll"
+
+          curl --fail --location --retry 3             https://raw.githubusercontent.com/PeteTimesSix/SimpleSidearms/master/v1.6/Assemblies/SimpleSidearms.dll             --output "$SS_DIR/Assemblies/SimpleSidearms.dll"
+
+          file "$CE_DIR/Assemblies/CombatExtended.dll"
+          file "$SS_DIR/Assemblies/SimpleSidearms.dll"
 
       - name: Build
         run: >
