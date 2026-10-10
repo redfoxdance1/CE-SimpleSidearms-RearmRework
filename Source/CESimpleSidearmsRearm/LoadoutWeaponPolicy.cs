@@ -27,13 +27,12 @@ namespace CESimpleSidearmsRearm
             {
                 if (slot?.thingDef == null ||
                     !slot.thingDef.IsWeapon ||
-                    slot.count <= 0 ||
                     slot.countType == LoadoutCountType.dropExcess)
                     continue;
 
                 int previous;
                 result.TryGetValue(slot.thingDef, out previous);
-                result[slot.thingDef] = previous + slot.count;
+                result[slot.thingDef] = previous + Math.Max(0, slot.count);
             }
 
             return result;
@@ -79,6 +78,8 @@ namespace CESimpleSidearmsRearm
                         ThingDefStuffDefPair pair = memory.RememberedWeapons[index];
                         memory.ForgetSidearmMemory(pair);
                     }
+
+                    NormalizeRememberedPairsToCarriedCopies(pawn, memory, def);
                 }
             }
             catch (Exception e)
@@ -127,6 +128,118 @@ namespace CESimpleSidearmsRearm
             }
 
             return bestIndex;
+        }
+
+        /// <summary>
+        /// CE exact rows care about ThingDef, while SS memory also keys on Stuff. If CE is
+        /// already satisfied by a carried copy with different Stuff, keep the existing memory
+        /// count but rebind stale pair entries to carried pairs. This prevents SS from fetching
+        /// an extra material variant that CE would immediately discard. A pawn with zero SS
+        /// memories stays at zero, preserving explicit "forget sidearm" intent.
+        /// </summary>
+        private static void NormalizeRememberedPairsToCarriedCopies(
+            Pawn pawn,
+            CompSidearmMemory memory,
+            ThingDef def)
+        {
+            List<int> memoryIndices = new List<int>();
+            for (int i = 0; i < memory.RememberedWeapons.Count; i++)
+            {
+                if (memory.RememberedWeapons[i].thing == def)
+                    memoryIndices.Add(i);
+            }
+
+            if (memoryIndices.Count == 0)
+                return;
+
+            List<ThingDefStuffDefPair> available = CarriedPairs(pawn, def);
+            if (available.Count == 0)
+                return;
+
+            var unmatched = new List<int>();
+
+            foreach (int index in memoryIndices)
+            {
+                ThingDefStuffDefPair remembered = memory.RememberedWeapons[index];
+                int carriedIndex = available.FindIndex(pair => pair == remembered);
+
+                if (carriedIndex >= 0)
+                    available.RemoveAt(carriedIndex);
+                else
+                    unmatched.Add(index);
+            }
+
+            foreach (int index in unmatched)
+            {
+                if (available.Count == 0)
+                    break;
+
+                ThingDefStuffDefPair oldPair = memory.RememberedWeapons[index];
+                ThingDefStuffDefPair newPair = available[0];
+                available.RemoveAt(0);
+
+                if (oldPair == newPair)
+                    continue;
+
+                memory.rememberedWeapons[index] = newPair;
+
+                // SS roles are pair-level. Only move a role when the old pair no longer has
+                // another remembered copy backing it.
+                if (!memory.RememberedWeapons.Contains(oldPair))
+                    RebindRoles(memory, oldPair, newPair);
+            }
+        }
+
+        private static List<ThingDefStuffDefPair> CarriedPairs(Pawn pawn, ThingDef def)
+        {
+            var result = new List<ThingDefStuffDefPair>();
+
+            if (pawn?.equipment?.Primary != null &&
+                pawn.equipment.Primary.def == def)
+            {
+                result.Add(new ThingDefStuffDefPair(
+                    pawn.equipment.Primary.def,
+                    pawn.equipment.Primary.Stuff));
+            }
+
+            if (pawn?.inventory?.innerContainer != null)
+            {
+                foreach (Thing thing in pawn.inventory.innerContainer)
+                {
+                    if (!(thing is ThingWithComps weapon) ||
+                        weapon.def != def ||
+                        !weapon.def.IsWeapon)
+                        continue;
+
+                    var pair = new ThingDefStuffDefPair(weapon.def, weapon.Stuff);
+                    int copies = Math.Max(1, weapon.stackCount);
+                    for (int i = 0; i < copies; i++)
+                        result.Add(pair);
+                }
+            }
+
+            return result;
+        }
+
+        private static void RebindRoles(
+            CompSidearmMemory memory,
+            ThingDefStuffDefPair oldPair,
+            ThingDefStuffDefPair newPair)
+        {
+            if (memory.ForcedWeapon.HasValue && memory.ForcedWeapon.Value == oldPair)
+                memory.ForcedWeapon = newPair;
+
+            if (memory.ForcedWeaponWhileDrafted.HasValue &&
+                memory.ForcedWeaponWhileDrafted.Value == oldPair)
+                memory.ForcedWeaponWhileDrafted = newPair;
+
+            if (memory.DefaultRangedWeapon.HasValue &&
+                memory.DefaultRangedWeapon.Value == oldPair)
+                memory.DefaultRangedWeapon = newPair;
+
+            if (memory.PreferredMeleeWeapon.HasValue &&
+                memory.PreferredMeleeWeapon.Value == oldPair)
+                memory.PreferredMeleeWeapon = newPair;
         }
     }
 
