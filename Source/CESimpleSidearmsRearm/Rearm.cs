@@ -141,19 +141,30 @@ namespace CESimpleSidearmsRearm
             };
 
             active[pawn.thingIDNumber] = state;
-            pawn.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+            // Do not interrupt until there is an actual rearm job to start. A pawn whose
+            // loadout is already satisfied should keep doing whatever the player assigned.
             Advance(state);
         }
 
         public void Cancel(Pawn pawn)
         {
-            if (pawn != null && active.Remove(pawn.thingIDNumber))
+            if (pawn == null ||
+                !active.TryGetValue(pawn.thingIDNumber, out RearmState state))
+                return;
+
+            active.Remove(pawn.thingIDNumber);
+
+            if (state.ActiveJob != null &&
+                pawn.jobs != null &&
+                pawn.CurJob == state.ActiveJob)
             {
-                Messages.Message(
-                    "Rearm cancelled for " + pawn.LabelShortCap + ".",
-                    MessageTypeDefOf.NeutralEvent,
-                    false);
+                pawn.jobs.EndCurrentJob(JobCondition.InterruptForced);
             }
+
+            Messages.Message(
+                "Rearm cancelled for " + pawn.LabelShortCap + ".",
+                MessageTypeDefOf.NeutralEvent,
+                false);
         }
 
         public override void GameComponentTick()
