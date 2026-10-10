@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Fetch current CE and Simple Sidearms assemblies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/deps/2890901044/Assemblies"
+          mkdir -p "$GITHUB_WORKSPACE/deps/927155256/v1.6/Assemblies"
+          curl --fail --location --retry 3             https://raw.githubusercontent.com/CombatExtended-Continued/CombatExtended/Development/Source/packages/CombatExtended.dll             --output "$GITHUB_WORKSPACE/deps/2890901044/Assemblies/CombatExtended.dll"
+          curl --fail --location --retry 3             https://raw.githubusercontent.com/PeteTimesSix/SimpleSidearms/master/v1.6/Assemblies/SimpleSidearms.dll             --output "$GITHUB_WORKSPACE/deps/927155256/v1.6/Assemblies/SimpleSidearms.dll"
+
+      - name: Build
+        run: >
+          dotnet build Source/CESimpleSidearmsRearm/CESimpleSidearmsRearm.csproj
+          --configuration Release
+          -p:RimWorldWorkshopDir="$GITHUB_WORKSPACE/deps"
+          --warnaserror
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: CESimpleSidearmsRearm
+          path: Assemblies/CESimpleSidearmsRearm.dll
+          if-no-files-found: error
