@@ -15,8 +15,12 @@ namespace CESimpleSidearmsRearm
         public const string HarmonyId = "redfoxdance1.CESimpleSidearmsRearm";
         public const string LogPrefix = "[CE+SS Rearm] ";
 
+        public static bool Enabled { get; private set; }
+
         static Bootstrap()
         {
+            Enabled = false;
+
             if (!ModsConfig.IsActive("CETeam.CombatExtended") ||
                 !ModsConfig.IsActive("PeteTimesSix.SimpleSidearms"))
             {
@@ -30,24 +34,44 @@ namespace CESimpleSidearmsRearm
             {
                 Log.Error(LogPrefix +
                     "An overlapping CE + Simple Sidearms compatibility suite is active. " +
-                    "To avoid double-patching loadout behavior, this mod will not install its patches.");
+                    "To avoid double-patching loadout behavior, this mod will remain disabled.");
                 return;
             }
 
+            var harmony = new Harmony(HarmonyId);
+
             try
             {
-                var harmony = new Harmony(HarmonyId);
                 harmony.PatchAll(typeof(Bootstrap).Assembly);
-                AuditPatches();
-                Log.Message(LogPrefix + "Patches installed.");
+
+                if (!AuditPatches())
+                {
+                    harmony.UnpatchAll(HarmonyId);
+                    Log.Error(LogPrefix +
+                        "Patch audit failed. All lmaodog patches were removed and the mod is disabled.");
+                    return;
+                }
+
+                Enabled = true;
+                Log.Message(LogPrefix + "Patches installed and audited.");
             }
             catch (Exception e)
             {
-                Log.Error(LogPrefix + "Harmony patching failed: " + e);
+                try
+                {
+                    harmony.UnpatchAll(HarmonyId);
+                }
+                catch
+                {
+                    // Preserve the original patching exception below.
+                }
+
+                Enabled = false;
+                Log.Error(LogPrefix + "Harmony patching failed; the mod is disabled: " + e);
             }
         }
 
-        private static void AuditPatches()
+        private static bool AuditPatches()
         {
             var targets = new List<MethodBase>
             {
@@ -121,12 +145,12 @@ namespace CESimpleSidearmsRearm
                 Log.Error(LogPrefix +
                     "Patch audit failed: " + found + "/" + targets.Count +
                     " expected target methods are patched.");
+                return false;
             }
-            else
-            {
-                Log.Message(LogPrefix +
-                    "Patch audit passed (" + found + "/" + targets.Count + ").");
-            }
+
+            Log.Message(LogPrefix +
+                "Patch audit passed (" + found + "/" + targets.Count + ").");
+            return true;
         }
     }
 }
