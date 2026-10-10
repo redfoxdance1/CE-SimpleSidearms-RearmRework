@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>CE + Simple Sidearms Rearm</name>
+  <author>Zynko</author>
+  <packageId>Zynko.CESimpleSidearmsRearm</packageId>
+  <supportedVersions><li>1.6</li></supportedVersions>
+  <description>Compatibility and loadout arbitration for Combat Extended + Simple Sidearms. CE is authoritative for quantities of exact weapon defs in a CE loadout; Simple Sidearms remains responsible for weapon selection. Adds duplicate-memory reconciliation and a bounded Rearm command.</description>
+  <modDependencies>
+    <li><packageId>brrainz.harmony</packageId><displayName>Harmony</displayName></li>
+    <li><packageId>CETeam.CombatExtended</packageId><displayName>Combat Extended</displayName></li>
+    <li><packageId>PeteTimesSix.SimpleSidearms</packageId><displayName>Simple Sidearms</displayName></li>
+  </modDependencies>
+  <loadAfter>
+    <li>brrainz.harmony</li>
+    <li>CETeam.CombatExtended</li>
+    <li>PeteTimesSix.SimpleSidearms</li>
+  </loadAfter>
+  <incompatibleWith>
+    <li>eebette.CESimpleSidearmsCompat</li>
+    <li>eebette.CESimpleSidearmsCompat.Loadouts</li>
+  </incompatibleWith>
+</ModMetaData>
